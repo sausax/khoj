@@ -6,35 +6,26 @@ import (
 	"github.com/blevesearch/bleve/v2"
 	index "github.com/blevesearch/bleve_index_api"
 	"github.com/gin-gonic/gin"
-	"io"
+	"github.com/google/uuid"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"time"
 )
 
-//var SearchIndex string = "logs.index"
-var SearchIndex string = "example.bleve"
-
-func mustEncode(w io.Writer, i interface{}) {
-	if headered, ok := w.(http.ResponseWriter); ok {
-		headered.Header().Set("Cache-Control", "no-cache")
-		headered.Header().Set("Content-type", "application/json")
-	}
-
-	e := json.NewEncoder(w)
-	if err := e.Encode(i); err != nil {
-		panic(err)
-	}
-}
+var SearchIndex string = "logs.index"
 
 func indexHandler(c *gin.Context) {
 	// open a new index
-	//mapping := bleve.NewIndexMapping()
-	//index, err := bleve.New("example.bleve", mapping)
-	index, err := bleve.Open(SearchIndex)
+	mapping := bleve.NewIndexMapping()
+	index, err := bleve.New(SearchIndex, mapping)
 	if err != nil {
 		fmt.Println(err, err.Error())
-		return
+		index, err = bleve.Open(SearchIndex)
+		if err != nil {
+			fmt.Println(err, err.Error())
+			return
+		}
 	}
 	defer index.Close()
 	//data := struct {
@@ -43,11 +34,21 @@ func indexHandler(c *gin.Context) {
 	//	Name: "text",
 	//}
 
-	var data interface{}
-	c.BindJSON(data)
+	var jsonData map[string]interface{} // map[string]interface{}
+	data, _ := ioutil.ReadAll(c.Request.Body)
+	if e := json.Unmarshal(data, &jsonData); e != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"msg": e.Error()})
+		return
+	}
 
+	fmt.Println("data: ", data, ", jsonData: ", jsonData)
 	// index some data
-	index.Index("id", data)
+	id, err := uuid.NewRandom()
+	if err != nil {
+		fmt.Println("Error while generating uuid")
+		return
+	}
+	index.Index(id.String(), jsonData)
 
 	newFsConfigBytes, _ := json.Marshal(data)
 
@@ -65,8 +66,10 @@ func searchHandler(c *gin.Context) {
 	}
 
 	defer index.Close()
+
+	queryText := c.Query("query")
 	// search for some text
-	query := bleve.NewMatchQuery("text")
+	query := bleve.NewMatchQuery(queryText)
 	search := bleve.NewSearchRequest(query)
 	search.Fields = []string{"*"}
 	searchResults, err := index.Search(search)
